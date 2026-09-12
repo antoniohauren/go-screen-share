@@ -1,0 +1,44 @@
+name: Portable artifacts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  artifacts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Test distributables
+        run: python3 packaging/test_artifacts.py
+      - name: Test and vet Go on the Linux build baseline
+        run: |
+          docker run --rm screen-share-packaging go test -race -tags webkit2_41 ./...
+          docker run --rm screen-share-packaging go vet -tags webkit2_41 ./...
+      - name: Check JavaScript
+        run: |
+          node --check web/sharer/sharer.js
+          node --check web/viewer/viewer.js
+      - name: Export artifacts
+        run: |
+          bash packaging/build.sh windows build
+          bash packaging/build.sh linux build
+          cd build
+          sha256sum screen-share-windows-amd64.exe screen-share-linux-x86_64.AppImage > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screen-share-portable
+          path: |
+            build/screen-share-windows-amd64.exe
+            build/screen-share-linux-x86_64.AppImage
+            build/SHA256SUMS
+          if-no-files-found: error

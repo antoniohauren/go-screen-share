@@ -5,7 +5,58 @@ Windows 11 and GNOME Wayland Wails sharers with an HTTPS browser receiver for
 service holds ephemeral session state and relays SDP/ICE only. No TURN, media
 hosting, accounts, recording, or persistent session data.
 
-## Build
+## Portable Downloads
+
+Download **screen-share-portable** from a successful **Portable artifacts** run in
+the repository's GitHub Actions tab, then unzip it. It contains:
+
+- `screen-share-windows-amd64.exe`: Windows 11 x64 with the current Microsoft Edge
+  WebView2 Evergreen Runtime (normally present on Windows 11).
+- `screen-share-linux-x86_64.AppImage`: x86-64 GNOME Wayland with glibc 2.39 or newer
+  (Ubuntu 24.04 or newer userspace), PipeWire, `pipewire-pulse`, and
+  `xdg-desktop-portal-gnome`. These are desktop services, not bundled daemons.
+- `SHA256SUMS`: artifact checksums.
+
+The AppImage bundles GTK3, WebKitGTK 4.1 and its helper processes, GStreamer capture
+and encoding plugins, and PipeWire 1.6.8 client libraries/plugin (built on Ubuntu
+24.04; its older distribution plugin lacks a required capture property). It uses the desktop's libc,
+graphics drivers/libraries, fonts, certificate store, and session services. No GTK,
+WebKitGTK, or GStreamer package installation is needed on the receiving machine.
+Native picker/audio/browser acceptance gates below still apply; automated packaging
+checks do not establish that every GNOME distribution or GPU works.
+
+Set `SCREENSHARE_URL` to your deployed public signaling origin before launching
+either artifact (see Windows instructions below). On Linux:
+
+```sh
+chmod +x screen-share-linux-x86_64.AppImage
+SCREENSHARE_URL=https://share.example.com ./screen-share-linux-x86_64.AppImage
+```
+
+If FUSE is unavailable, run with `--appimage-extract-and-run` instead of installing
+anything. For offline bundle diagnostics, use `--appimage-extract-and-run --check-runtime`;
+this checks capture plugin loading and synthetic VP8/Opus encoding, not actual capture.
+Artifacts have no installer, auto-update, or code signing.
+
+## Build Portable Artifacts
+
+Maintainer build host: x86-64 Linux, Bash, Go 1.24+, and Docker. Linux packaging
+builds inside Ubuntu 24.04 so host-distribution libraries cannot leak into artifacts.
+First build needs network access for Go modules, container images, Ubuntu packages,
+and checksum-verified, versioned AppImage tools. Windows cross-build needs only Go/Bash.
+
+```sh
+bash packaging/build.sh windows build
+bash packaging/build.sh linux build
+python3 packaging/test_artifacts.py
+```
+
+Output: `build/screen-share-windows-amd64.exe` and
+`build/screen-share-linux-x86_64.AppImage`. The same commands run in
+`.github/workflows/artifacts.yml`, which makes the downloads above available after
+checks pass. Rebuild and redistribute when bundled runtime libraries need updates.
+
+## Build From Source
 
 Requires Go 1.24+; the Windows desktop needs a current Microsoft Edge WebView2
 Evergreen Runtime. The capture picker is WebView2's built-in screen/window picker,
@@ -18,7 +69,6 @@ GOOS=windows go build -tags production -ldflags="-H windowsgui" -o screen-share.
 ```
 
 The Windows executable embeds its UI; there is no npm build or installer.
-Windows resource metadata/signing and Linux AppImage packaging are outside this slice.
 
 ### Linux Build
 
@@ -61,7 +111,8 @@ the signaling service, and no microphone is opened.
    capture errors, app exit, and signaling loss also end sharing. Restart after changing
    the default audio device to select its new mix.
 
-This is a dynamically linked Linux executable, not yet a self-contained AppImage.
+This source-build command produces a dynamically linked executable. Use the portable
+build command above to bundle its application dependencies into an AppImage.
 
 ## Run Public Signaling
 
@@ -144,12 +195,22 @@ capture-loss cleanup, foreign access-URL rejection, failed-peer isolation, Stop
 invalidation, and A/V clock alignment despite deliberately delayed audio delivery.
 Synthetic media tests do not establish physical screen/audio correctness.
 
+Packaging tests use the agreed **build command → distributable artifact seam**:
+`python3 packaging/test_artifacts.py` builds both real artifacts, checks the Windows
+x64 GUI executable and embedded capture UI, then extracts and relocates the AppImage
+into a path containing spaces. A fresh Ubuntu runtime container, with neither
+WebKitGTK nor GStreamer installed, verifies required plugins, synthetic VP8/Opus
+pipelines, production-required PipeWire clock support, and UI/WebKit process startup
+through `--appimage-extract-and-run` under Xvfb as an unprivileged user.
+This is a packaging smoke test; GNOME Wayland capture remains a manual gate.
+
 ### Manual Acceptance Gates
 
 These require Windows 11, a public HTTPS deployment, and real desktop browsers.
 They have **not** been verified by the Linux-hosted automated suite.
 
-- Launch the built executable with current WebView2; confirm picker fits at
+- Download the portable executable onto a clean Windows 11 machine with current
+  WebView2. Launch without installers; confirm picker fits at
   normal and high DPI. Cancel selection: no session or capture remains.
 - Share an entire screen while playing system audio. Verify moving video and
   sound in Chrome, Edge, and Firefox, including playback/unmute controls.
@@ -186,7 +247,9 @@ These gates remain **unverified**. Development environment: GNOME 50.4 on Waylan
 PipeWire 1.6.8, WebKitGTK 4.1 API / 2.52.6, GStreamer 1.28.6. Record actual OS,
 runtime versions, browser versions, and results when performing acceptance.
 
-- Launch the production build; verify picker focus, screen/window choices, keyboard
+- Download the AppImage onto GNOME Wayland without adding GTK/WebKitGTK/GStreamer
+  packages. Test both normal launch and `--appimage-extract-and-run`, including a
+  path containing spaces. Then verify picker focus, screen/window choices, keyboard
   access, normal/high DPI, and cancellation without leaving a portal session.
 - Stop while picker is open and during connection setup. Immediately restart; old
   callbacks must not expose a URL/code or leave a platform capture indicator.

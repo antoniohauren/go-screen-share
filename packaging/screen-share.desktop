@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Screen Share
+Comment=Share a screen or window with friends
+Exec=screen-share
+Icon=screen-share
+Categories=Network;AudioVideo;
+Terminal=false

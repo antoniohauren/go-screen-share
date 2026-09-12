@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+APPDIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+export APPDIR
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+backend=${GDK_BACKEND:-wayland,x11}
+export XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+for hook in "$APPDIR"/apprun-hooks/*.sh; do
+    source "$hook"
+done
+export GDK_BACKEND="$backend"
+export FONTCONFIG_PATH="$APPDIR/etc/fonts"
+export FONTCONFIG_FILE="$FONTCONFIG_PATH/fonts.conf"
+export GIO_MODULE_DIR="$APPDIR/usr/lib/gio/modules"
+export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_PATH_1_0="$GST_PLUGIN_SYSTEM_PATH_1_0"
+export GST_PLUGIN_SCANNER_1_0="$APPDIR/usr/bin/gst-plugin-scanner"
+export PIPEWIRE_MODULE_DIR="$APPDIR/usr/lib/pipewire-0.3"
+export SPA_PLUGIN_DIR="$APPDIR/usr/lib/spa-0.2"
+export PIPEWIRE_CONFIG_DIR="$APPDIR/usr/share/pipewire"
+
+if [[ ${1:-} == --check-runtime ]]; then
+    for element in pipewiresrc pulsesrc videoconvert videoscale videorate vp8enc \
+        rtpvp8pay audioconvert audioresample opusenc rtpopuspay appsink; do
+        "$APPDIR/usr/bin/gst-inspect-1.0" "$element" > /dev/null
+    done
+    # Production portal capture requires this property; older plugins load but
+    # reject the capture pipeline before connecting to the portal's remote FD.
+    "$APPDIR/usr/bin/gst-inspect-1.0" pipewiresrc | grep 'provide-clock' > /dev/null
+    "$APPDIR/usr/bin/gst-launch-1.0" -q videotestsrc num-buffers=10 ! \
+        videoconvert ! videoscale ! videorate ! vp8enc ! rtpvp8pay ! fakesink
+    "$APPDIR/usr/bin/gst-launch-1.0" -q audiotestsrc num-buffers=10 ! \
+        audioconvert ! audioresample ! opusenc ! rtpopuspay ! fakesink
+    printf 'Bundled capture plugins and VP8/Opus pipelines OK\n'
+    exit 0
+fi
+cd "$APPDIR/usr"
+exec "$APPDIR/usr/bin/screen-share" "$@"
