@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screen Share / Watch</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="viewer.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><span class="brand">SCREEN SHARE</span><span class="edition">02 / RECEIVE</span></header>
+    <div class="heading"><h1>A front row.<br>From anywhere.</h1><p>A private screen, shared directly.<br>No account. No media relay.</p></div>
+    <form id="join-form">
+      <div class="field"><label for="code">Session code</label><input id="code" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Enter the code from your friend" maxlength="256"></div>
+      <button id="join" type="submit">Join stream</button>
+      <button id="reconnect" type="button" class="secondary" hidden>Reconnect</button>
+    </form>
+    <div class="stage"><video id="video" autoplay playsinline controls aria-label="Shared screen"></video><span id="waiting">WAITING FOR A SIGNAL</span></div>
+    <button id="play" type="button" hidden>Play / enable sound</button>
+    <footer><span id="state" class="badge">NOT CONNECTED</span><span>DIRECT / P2P</span></footer>
+    <p id="status" role="status" aria-live="polite">Enter the session code to watch.</p>
+    <p class="note">Desktop Chrome, Edge or Firefox. Restrictive networks may prevent a direct connection.</p>
+  </main>
+</body>
+</html>
