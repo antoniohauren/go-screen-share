@@ -2,6 +2,7 @@
 set -euo pipefail
 APPDIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 export APPDIR
+export PATH="$APPDIR/usr/bin:$PATH"
 export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 backend=${GDK_BACKEND:-wayland,x11}
 export XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
@@ -21,9 +22,11 @@ export PIPEWIRE_CONFIG_DIR="$APPDIR/usr/share/pipewire"
 
 if [[ ${1:-} == --check-runtime ]]; then
     for element in pipewiresrc pulsesrc videoconvert videoscale videorate vp8enc \
-        rtpvp8pay audioconvert audioresample opusenc rtpopuspay appsink; do
+        rtpvp8pay audioconvert audioresample opusenc rtpopuspay appsink fdsrc rawaudioparse; do
         "$APPDIR/usr/bin/gst-inspect-1.0" "$element" > /dev/null
     done
+    pactl --version > /dev/null
+    parec --version > /dev/null
     # Production portal capture requires this property; older plugins load but
     # reject the capture pipeline before connecting to the portal's remote FD.
     "$APPDIR/usr/bin/gst-inspect-1.0" pipewiresrc | grep 'provide-clock' > /dev/null

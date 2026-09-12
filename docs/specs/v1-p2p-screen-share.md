@@ -1,3 +1,8 @@
+> Subsequent requirement: Linux now offers an explicit playback-stream picker for
+> app-only audio with a window or screen. This supersedes the Linux window-audio
+> exclusion below; see README's GNOME sharing instructions. Windows behavior is
+> unchanged. Audio-stream selection is independent of the native window picker.
+
 ## Problem Statement
 
 Friends need a small desktop application that can share either a selected window or full screen directly to browser viewers. They need no account, chat, recording, remote control, or media-hosting service.

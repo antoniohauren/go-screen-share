@@ -9,10 +9,11 @@ go build -trimpath -tags production,webkit2_41 -ldflags='-s -w' \
 # Plugins and helpers are loaded dynamically, so ELF dependency scanning alone
 # cannot discover them. Keep the exact capture/encoding pipeline plus test sources.
 for plugin in app coreelements videoconvertscale videorate vpx rtp audioconvert \
-    audioresample opus pulseaudio pipewire videotestsrc audiotestsrc; do
+    audioresample opus pulseaudio pipewire rawparse videotestsrc audiotestsrc; do
     cp "$lib/gstreamer-1.0/libgst$plugin.so" "$appdir/usr/lib/gstreamer-1.0/"
 done
 cp /usr/bin/gst-inspect-1.0 /usr/bin/gst-launch-1.0 "$appdir/usr/bin/"
+cp /usr/bin/pactl /usr/bin/parec "$appdir/usr/bin/"
 mkdir -p "$appdir/usr/lib/x86_64-linux-gnu"
 cp -a "$lib/webkit2gtk-4.1" "$appdir/usr/lib/x86_64-linux-gnu/"
 cp -a "$lib/pipewire-0.3" "$lib/spa-0.2" "$appdir/usr/lib/"
@@ -31,6 +32,7 @@ for library in libpipewire-0.3.so.0 libharfbuzz.so.0 libfreetype.so.6 \
 done
 DEPLOY_GTK_VERSION=3 /opt/linuxdeploy/squashfs-root/AppRun \
     --appdir "$appdir" --executable "$appdir/usr/bin/screen-share" \
+    --executable "$appdir/usr/bin/pactl" --executable "$appdir/usr/bin/parec" \
     --deploy-deps-only "$appdir/usr/lib" \
     "${libraries[@]}" \
     --desktop-file packaging/screen-share.desktop --icon-file packaging/screen-share.svg \

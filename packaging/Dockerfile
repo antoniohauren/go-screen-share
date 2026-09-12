@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl file build-essential pkg-config patchelf squashfs-tools \
     libgtk-3-dev libwebkit2gtk-4.1-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-    gstreamer1.0-pipewire librsvg2-common \
+    gstreamer1.0-pipewire librsvg2-common pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"

@@ -19,7 +19,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 button:not(:disabled):hover { filter: brightness(.9); }
 :focus-visible { outline: 3px solid var(--orange); outline-offset: 4px; }
 label { display: block; font-size: 12px; margin: 12px 0 6px; }
-input { width: 100%; min-width: 0; background: #fffdf7; border: 1px solid var(--line); color: var(--ink); padding: 12px; font: 15px "Segoe UI", sans-serif; border-radius: 0; }
+input, select { width: 100%; min-width: 0; background: #fffdf7; border: 1px solid var(--line); color: var(--ink); padding: 12px; font: 15px "Segoe UI", sans-serif; border-radius: 0; }
 .code { font-size: 19px; }
 .note { color: var(--muted); font-size: 13px; }
 footer { border-top: 1px solid var(--ink); padding-top: 18px; font-size: 13px; }

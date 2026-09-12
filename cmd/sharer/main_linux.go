@@ -26,8 +26,12 @@ type App struct {
 	done   chan struct{}
 }
 
+func (a *App) AudioApps() ([]sharer.AudioApp, error) {
+	return sharer.ListAudioApps(a.ctx)
+}
+
 // Start returns immediately so Stop can cancel the native picker as well as media.
-func (a *App) Start() error {
+func (a *App) Start(audioID string) error {
 	origin, err := a.SignalingURL()
 	if err != nil {
 		return err
@@ -39,7 +43,7 @@ func (a *App) Start() error {
 	}
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.cancel, a.done = cancel, make(chan struct{})
-	go a.share(ctx, origin)
+	go a.share(ctx, origin, audioID)
 	return nil
 }
 
@@ -53,7 +57,7 @@ func (a *App) Stop() {
 	}
 }
 
-func (a *App) share(ctx context.Context, origin string) {
+func (a *App) share(ctx context.Context, origin, audioID string) {
 	var failure error
 	emit := func(state sharer.State) { runtime.EventsEmit(a.ctx, "share-state", state) }
 	defer func() {
@@ -84,6 +88,12 @@ func (a *App) share(ctx context.Context, origin string) {
 		case <-run.Done():
 		}
 	}()
+	if audioID != "" {
+		if err := source.UseAppAudio(run, audioID); err != nil {
+			failure = err
+			return
+		}
+	}
 	emit(sharer.State{State: "connecting"})
 	session, err := sharer.Start(run, origin, source.Pipeline, nil)
 	if err != nil {

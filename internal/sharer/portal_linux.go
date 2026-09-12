@@ -26,7 +26,9 @@ const (
 // Source owns one portal selection and its PipeWire remote. Do not copy it.
 // Pipeline is for Start in this process; it contains a process-local descriptor.
 type Source struct {
-	Pipeline string
+	Pipeline      string
+	videoPipeline string
+	audio         *appAudio
 
 	conn      *dbus.Conn
 	owner     string
@@ -47,6 +49,9 @@ func (s *Source) Done() <-chan struct{} { return s.done }
 func (s *Source) Close() {
 	s.closeOnce.Do(func() {
 		s.end()
+		if s.audio != nil {
+			s.audio.close()
+		}
 		// Repeat after any in-flight selection call: cancellation may have raced
 		// CreateSession before the predicted session object existed.
 		s.closeObject(s.session, portalSession)
@@ -251,16 +256,13 @@ func SelectSource(ctx context.Context) (*Source, error) {
 		"videoconvert ! videoscale add-borders=true ! video/x-raw,format=I420,width=1920,height=1080,pixel-aspect-ratio=1/1 ! "+
 		"vp8enc name=video_encoder deadline=1 cpu-used=8 lag-in-frames=0 target-bitrate=4000000 keyframe-max-dist=30 ! "+
 		"rtpvp8pay pt=96 perfect-rtptime=false ! appsink name=video sync=false max-buffers=128 drop=true", fd, streams[0].Node)
+	s.videoPipeline = s.Pipeline
 	if sourceType == 1 {
 		// Pulse resolves this alias to the default sink's monitor, not its default
 		// input. Never retry with an unset device or a microphone on audio failure.
 		s.Pipeline += " pulsesrc device=\"@DEFAULT_MONITOR@\" " +
 			"stream-properties=\"props,node.dont-reconnect=(string)true,node.dont-fallback=(string)true,node.dont-move=(string)true\" " +
-			"provide-clock=false buffer-time=20000 latency-time=10000 ! " +
-			"queue leaky=downstream max-size-buffers=8 max-size-bytes=0 max-size-time=0 ! " +
-			"audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 ! " +
-			"opusenc bitrate=128000 frame-size=20 ! rtpopuspay pt=111 perfect-rtptime=false ! " +
-			"appsink name=audio sync=false max-buffers=128 drop=true"
+			"provide-clock=false buffer-time=20000 latency-time=10000 ! " + audioEncoding
 	}
 	if err := selection.Err(); err != nil {
 		return nil, err

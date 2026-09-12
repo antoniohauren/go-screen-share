@@ -7,11 +7,33 @@ const stateText = document.querySelector("#state");
 const viewerCount = document.querySelector("#viewers");
 const urlField = document.querySelector("#url");
 const codeField = document.querySelector("#code");
+const audioApp = document.querySelector("#audio-app");
+const refreshAudio = document.querySelector("#refresh-audio");
 let origin;
 let active;
 let native = false;
 let nativeStart = Promise.resolve();
 let nativeStopping = false;
+
+refreshAudio.addEventListener("click", async () => {
+  refreshAudio.disabled = true;
+  try {
+    const apps = await window.go.main.App.AudioApps();
+    if (startButton.disabled) return;
+    const selected = audioApp.value;
+    audioApp.replaceChildren(new Option("Screen: system audio / Window: no audio", ""));
+    for (const app of apps) audioApp.add(new Option(app.name, app.id));
+    if (selected && !apps.some(app => app.id === selected)) {
+      audioApp.add(new Option("Previous stream ended — refresh and select again", selected));
+    }
+    audioApp.value = selected;
+    statusText.textContent = apps.length ? "Choose the app audio stream, then choose your screen or window." : "No playback streams found. Play sound in your app, then refresh.";
+  } catch (error) {
+    statusText.textContent = `Cannot list app audio: ${error.message || error}`;
+  } finally {
+    refreshAudio.disabled = startButton.disabled;
+  }
+});
 
 function stop(message = "Capture stopped.", confirmed = false) {
   if (native) {
@@ -27,6 +49,8 @@ function stop(message = "Capture stopped.", confirmed = false) {
       nativeStopping = false;
       stateText.textContent = "STOPPED";
       startButton.disabled = !origin;
+      audioApp.disabled = false;
+      refreshAudio.disabled = false;
       stopButton.disabled = true;
       statusText.textContent = "Capture stopped. Offline session access may take about 30 seconds to expire.";
     }).catch(error => {
@@ -159,11 +183,15 @@ startButton.addEventListener("click", async () => {
     nativeStopping = false;
     startButton.disabled = true;
     stopButton.disabled = false;
-    try { nativeStart = window.go.main.App.Start(); await nativeStart; }
+    audioApp.disabled = true;
+    refreshAudio.disabled = true;
+    try { nativeStart = window.go.main.App.Start(audioApp.value); await nativeStart; }
     catch (error) {
       if (nativeStopping) return;
       startButton.disabled = false;
       stopButton.disabled = true;
+      audioApp.disabled = false;
+      refreshAudio.disabled = false;
       statusText.textContent = `Cannot start: ${error.message || error}`;
     }
     return;
@@ -264,7 +292,8 @@ window.addEventListener("pagehide", () => stop());
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) throw new Error("SCREENSHARE_URL must be an HTTPS origin.");
     native = typeof window.go.main.App.Start === "function";
     if (native) {
-      document.querySelector("#capture-help").textContent = "Choose a screen or window in the GNOME picker. Screen sharing also captures all sound from your default speakers/headphones, without microphone audio. Window sharing is video only.";
+      document.querySelector("#capture-help").textContent = "Choose an audio app below to share its sound with a screen or window. Without an app selection, screens share all system audio and windows share video only. Microphone audio is never captured.";
+      document.querySelector("#app-audio").hidden = false;
       window.runtime.EventsOn("share-state", state => {
         if (nativeStopping) return;
         urlField.value = state.url;
@@ -273,6 +302,8 @@ window.addEventListener("pagehide", () => stop());
         stateText.textContent = state.state.toUpperCase();
         startButton.disabled = state.state !== "stopped";
         stopButton.disabled = state.state === "stopped";
+        audioApp.disabled = state.state !== "stopped";
+        refreshAudio.disabled = state.state !== "stopped";
         statusText.textContent = state.error || state.notice || ({
           choosing: "Choose a screen or window. Cancel shares nothing.",
           connecting: "Starting native capture and secure signaling...",

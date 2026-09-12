@@ -77,7 +77,9 @@ libraries, and GStreamer development libraries (`gstreamer-app-1.0`). Runtime
 requires GNOME Wayland, PipeWire, `pipewire-pulse`, `xdg-desktop-portal-gnome`, and
 GStreamer plugins providing `pipewiresrc`, `pulsesrc`, `videoconvert`, `videoscale`,
 `videorate`, `vp8enc`, `rtpvp8pay`, `audioconvert`, `audioresample`, `opusenc`,
-`rtpopuspay`, and `appsink`. Tests additionally use `videotestsrc` and `audiotestsrc`.
+`rtpopuspay`, `appsink`, `fdsrc`, and `rawaudioparse`. App audio also requires
+`pactl` and `parec` (`libpulse` on Arch, `pulseaudio-utils` on Ubuntu; bundled in
+the AppImage). Tests additionally use `videotestsrc` and `audiotestsrc`.
 On Arch these come from GTK3/WebKit2GTK 4.1, GStreamer base/good plugins, and PipeWire
 packages; other distributions split development packages separately.
 
@@ -98,18 +100,34 @@ the signaling service, and no microphone is opened.
 
 ### Share On GNOME Wayland
 
-1. Click **Choose screen or window** and select one source in the GNOME portal picker.
-2. Selecting a screen also captures the complete mix playing through the default
+1. For app-only sound, play audio in the app, click **Refresh apps**, and select its
+   playback stream under **Audio app**. Then click **Choose screen or window** and
+   select one source in the GNOME portal picker. Audio selection is independent of
+   window selection: choose the matching app yourself.
+2. With an audio app selected, either a window or screen shares only that playback
+   stream, using PulseAudio's single-stream monitor. Other apps and the microphone
+   are excluded. Multiple windows/tabs may share one stream; multiple streams from
+   the same app are listed separately. Only the selected stream is captured.
+   Restarted playback may require stopping, refreshing, and selecting it again.
+   An unavailable stream fails rather than falling back to system audio.
+3. Without an audio app selected, a screen captures the complete mix through the default
    speakers/headphones at capture start. This is separate from portal video consent
    and disclosed in the UI before selection. It does not combine multiple output
    devices, capture a microphone, or isolate individual applications. PipeWire
    stream properties disable movement, reconnection, and fallback to other outputs.
-3. Selecting a window opens video capture only, with no audio capture pipeline.
-4. URL/code appear only after every required media track produces packets and
-   secure signaling starts. Missing system audio fails closed; there is no input fallback.
-5. Stop cancels a pending picker or ends local media and portal access. Portal closure,
+4. Without an audio app selected, a window opens video capture only.
+5. URL/code appear only after every required media track produces packets and
+   secure signaling starts. Missing requested audio fails closed; there is no input fallback.
+6. Stop cancels a pending picker or ends local media and portal access. Portal closure,
    capture errors, app exit, and signaling loss also end sharing. Restart after changing
    the default audio device to select its new mix.
+
+To check app-audio isolation against two synthetic playback streams on a private
+null sink (no sound reaches speakers), run:
+
+```sh
+SCREENSHARE_TEST_APP_AUDIO=1 go test ./internal/sharer -run TestAppAudioIsolation -v
+```
 
 This source-build command produces a dynamically linked executable. Use the portable
 build command above to bundle its application dependencies into an AppImage.
@@ -256,8 +274,11 @@ runtime versions, browser versions, and results when performing acceptance.
 - Share a screen while playing sound through default speakers/headphones. Verify
   moving video and matching sound in desktop Chrome, Edge, and Firefox. Speak into
   the microphone and play sound on another output: neither should be included.
-- Share a window while system audio plays: only that window reaches viewers, and
+- Without an audio app selected, share a window while system audio plays: only that window reaches viewers, and
   SDP/media contain no audio. Move/resize/occlude the window and leave screen static.
+- Select an app's playback stream and share its window while another app plays
+  different audio. Verify viewers hear only the selected stream, local playback
+  continues, and Stop ends capture. Repeat after the playback stream is recreated.
 - Remove/unavailable default audio output before Start: no URL/code is exposed.
   Remove output during capture: failure must stop sharing, never select microphone.
 - Open four browser viewers, leave/reconnect one, and reject a fifth. Late viewers
