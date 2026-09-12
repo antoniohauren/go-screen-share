@@ -17,7 +17,7 @@ function stop(message = "Capture stopped.", confirmed = false) {
     clearTimeout(run.timer);
     clearTimeout(run.watchdog);
     run.stream?.getTracks().forEach(track => track.stop());
-    removePeer(run);
+    for (const peer of run.peers.values()) removePeer(run, peer);
     if (run.socket?.readyState === WebSocket.OPEN) {
       run.socket.send(JSON.stringify({ type: "stop" }));
     }
@@ -39,17 +39,16 @@ function send(run, message) {
   }
 }
 
-function removePeer(run) {
-  const peer = run.peer;
+function removePeer(run, peer) {
   if (!peer) return;
-  run.peer = null;
+  run.peers.delete(peer.id);
   clearTimeout(peer.timer);
   peer.pc?.close();
 }
 
 function failPeer(run, peer, message) {
-  if (active !== run || !peer || run.peer !== peer) return;
-  removePeer(run);
+  if (active !== run || !peer || run.peers.get(peer.id) !== peer) return;
+  removePeer(run, peer);
   send(run, { type: "disconnect-peer", peer: peer.id });
   statusText.textContent = message;
 }
@@ -59,7 +58,7 @@ async function receive(run, message) {
   if (message.type === "stopped") return stop("Sharing stopped. The session code is no longer valid.", true);
   if (message.type === "error") {
     if (message.peer !== undefined) {
-      if (run.peer?.id === message.peer) failPeer(run, run.peer, "Viewer connection rejected. Capture continues; ask your viewer to reconnect with the same code.");
+      failPeer(run, run.peers.get(message.peer), "Viewer connection rejected. Capture continues; ask that viewer to reconnect with the same code.");
       return;
     }
     return stop(`Signaling rejected the request: ${message.error}. Capture stopped. Start a new session.`);
@@ -75,24 +74,23 @@ async function receive(run, message) {
     codeField.value = message.code;
     stateText.textContent = "SHARING";
     viewerCount.textContent = String(message.viewers);
-    statusText.textContent = "Sharing is live. Send the URL and code to your viewer.";
+    statusText.textContent = "Sharing is live. Send the URL and code to up to four viewers.";
     return;
   }
   if (!run.started) throw new Error("Unexpected signaling response.");
   if (message.type === "viewer-left") {
-    if (run.peer && run.peer.id !== message.peer) return;
-    removePeer(run);
+    removePeer(run, run.peers.get(message.peer));
     viewerCount.textContent = String(message.viewers);
     return;
   }
   if (message.type === "viewer-joined") {
-    if (typeof message.peer !== "string" || !message.peer || run.peer?.id === message.peer) return;
-    removePeer(run);
+    if (typeof message.peer !== "string" || !message.peer || run.peers.has(message.peer)) return;
     viewerCount.textContent = String(message.viewers);
-    const peer = run.peer = { id: message.peer, pc: null, ice: [], queue: Promise.resolve() };
+    const peer = { id: message.peer, pc: null, ice: [], queue: Promise.resolve() };
+    run.peers.set(peer.id, peer);
     const pc = peer.pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-    const current = () => active === run && run.peer === peer;
-    const failed = () => failPeer(run, peer, "Your viewer's direct connection failed. Restrictive NAT or firewall may block P2P; no TURN relay is available. Capture continues; ask them to reconnect with the same code.");
+    const current = () => active === run && run.peers.get(peer.id) === peer;
+    const failed = () => failPeer(run, peer, "A viewer's direct connection failed. Restrictive NAT or firewall may block P2P; no TURN relay is available. Capture continues for other viewers; ask them to reconnect with the same code.");
     peer.timer = setTimeout(failed, 30000);
     pc.onconnectionstatechange = () => {
       if (!current()) return;
@@ -109,9 +107,9 @@ async function receive(run, message) {
     if (current()) send(run, { type: "offer", peer: message.peer, sdp: pc.localDescription.toJSON() });
     return;
   }
-  const peer = run.peer;
-  if (!peer || peer.id !== message.peer) return;
-  const current = () => active === run && run.peer === peer;
+  const peer = run.peers.get(message.peer);
+  if (!peer) return;
+  const current = () => active === run && run.peers.get(peer.id) === peer;
   // Only negotiation is queued; stop and viewer-left take effect immediately.
   peer.queue = peer.queue.then(async () => {
     if (!current()) return;
@@ -133,7 +131,7 @@ async function receive(run, message) {
 
 startButton.addEventListener("click", async () => {
   if (active || !origin) return;
-  const run = { peer: null, stream: null, socket: null, started: false };
+  const run = { peers: new Map(), stream: null, socket: null, started: false };
   active = run;
   startButton.disabled = true;
   stopButton.disabled = false;
@@ -200,11 +198,11 @@ startButton.addEventListener("click", async () => {
       }
       if (message.type === "heartbeat") return;
       const pending = receive(run, message);
-      const peer = run.peer;
+      const peer = run.peers.get(message.peer);
       pending.catch(error => {
         if (active !== run) return;
         if (message.peer !== undefined) {
-          if (peer?.id === message.peer) failPeer(run, peer, "Viewer negotiation failed. Capture continues; ask your viewer to reconnect with the same code.");
+          failPeer(run, peer, "Viewer negotiation failed. Capture continues for other viewers; ask that viewer to reconnect with the same code.");
           return;
         }
         stop(`Sharing failed: ${error.message}. Capture stopped.`);

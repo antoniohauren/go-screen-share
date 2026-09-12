@@ -74,7 +74,7 @@ func TestShareSessionStartExposesAccessAndSharingState(t *testing.T) {
 	}
 }
 
-func TestShareSessionJoinRequiresCodeAndEnforcesOneViewer(t *testing.T) {
+func TestShareSessionJoinRequiresCodeAndEnforcesFourViewers(t *testing.T) {
 	server := httptest.NewTLSServer(signaling.New("https://share.example"))
 	defer server.Close()
 	sharer := connect(t, server)
@@ -92,21 +92,32 @@ func TestShareSessionJoinRequiresCodeAndEnforcesOneViewer(t *testing.T) {
 	if joined["peer"] == "" || joined["peer"] != notice["peer"] || notice["viewers"] != float64(1) {
 		t.Fatalf("%#v %#v", joined, notice)
 	}
-	second := connect(t, server)
-	send(t, second, join)
-	if got := receive(t, second, "error"); got["error"] != "session-full" {
+	for _, count := range []float64{2, 3, 4} {
+		next := connect(t, server)
+		send(t, next, join)
+		got := receive(t, next, "joined")
+		notice := receive(t, sharer, "viewer-joined")
+		if got["viewers"] != count || notice["viewers"] != count || got["peer"] != notice["peer"] || notice["state"] != "sharing" {
+			t.Fatalf("%#v %#v", got, notice)
+		}
+	}
+	overflowViewer := connect(t, server)
+	send(t, overflowViewer, join)
+	if got := receive(t, overflowViewer, "error"); got["error"] != "session-full" {
 		t.Fatalf("%#v", got)
 	}
 	viewer.CloseNow()
-	if got := receive(t, sharer, "viewer-left"); got["viewers"] != float64(0) {
+	if got := receive(t, sharer, "viewer-left"); got["viewers"] != float64(3) || got["peer"] != joined["peer"] {
 		t.Fatalf("%#v", got)
 	}
-	send(t, second, join)
-	rejoined := receive(t, second, "joined")
-	if rejoined["peer"] == joined["peer"] {
-		t.Fatal("reconnect reused old peer identity")
+	send(t, overflowViewer, join)
+	rejoined := receive(t, overflowViewer, "joined")
+	if rejoined["peer"] == joined["peer"] || rejoined["viewers"] != float64(4) {
+		t.Fatalf("unexpected reconnect: %#v", rejoined)
 	}
-	receive(t, sharer, "viewer-joined")
+	if got := receive(t, sharer, "viewer-joined"); got["viewers"] != float64(4) {
+		t.Fatalf("%#v", got)
+	}
 }
 
 func TestShareSessionRelaysOnlyCurrentPeerSetup(t *testing.T) {
@@ -142,6 +153,50 @@ func TestShareSessionRelaysOnlyCurrentPeerSetup(t *testing.T) {
 	}
 }
 
+func TestShareSessionIsolatesViewerSignaling(t *testing.T) {
+	server := httptest.NewTLSServer(signaling.New("https://share.example"))
+	defer server.Close()
+	sharer := connect(t, server)
+	send(t, sharer, message{"type": "start"})
+	started := receive(t, sharer, "started")
+	var viewers []*websocket.Conn
+	var peers []any
+	for range 4 {
+		viewer := connect(t, server)
+		send(t, viewer, message{"type": "join", "session": started["session"], "code": started["code"]})
+		peer := receive(t, viewer, "joined")["peer"]
+		receive(t, sharer, "viewer-joined")
+		viewers = append(viewers, viewer)
+		peers = append(peers, peer)
+	}
+	for i, viewer := range viewers {
+		peer := peers[i]
+		send(t, sharer, message{"type": "offer", "peer": peer, "sdp": message{"type": "offer", "sdp": "v=0\r\n"}})
+		if got := receive(t, viewer, "offer"); got["peer"] != peer {
+			t.Fatalf("misrouted offer: %#v", got)
+		}
+		send(t, viewer, message{"type": "answer", "peer": peer, "sdp": message{"type": "answer", "sdp": "v=0\r\n"}})
+		if got := receive(t, sharer, "answer"); got["peer"] != peer {
+			t.Fatalf("misrouted answer: %#v", got)
+		}
+		send(t, sharer, message{"type": "ice", "peer": peer, "candidate": message{"candidate": ""}})
+		if got := receive(t, viewer, "ice"); got["peer"] != peer {
+			t.Fatalf("misrouted ICE: %#v", got)
+		}
+		// Same sender orders forged ICE before valid ICE, without timing assertions.
+		send(t, viewer, message{"type": "ice", "peer": peers[(i+1)%4], "candidate": message{"candidate": "forged"}})
+		send(t, viewer, message{"type": "ice", "peer": peer, "candidate": message{"candidate": ""}})
+		if got := receive(t, sharer, "ice"); got["peer"] != peer || got["candidate"].(map[string]any)["candidate"] != "" {
+			t.Fatalf("viewer impersonated another peer: %#v", got)
+		}
+	}
+	send(t, sharer, message{"type": "stop"})
+	receive(t, sharer, "stopped")
+	for _, viewer := range viewers {
+		receive(t, viewer, "stopped")
+	}
+}
+
 func TestShareSessionStaleSignalingDoesNotInterruptReconnect(t *testing.T) {
 	server := httptest.NewTLSServer(signaling.New("https://share.example"))
 	defer server.Close()
@@ -163,7 +218,7 @@ func TestShareSessionStaleSignalingDoesNotInterruptReconnect(t *testing.T) {
 	receive(t, sharer, "stopped")
 }
 
-func TestShareSessionStopInvalidatesAccessAndDisconnectsViewer(t *testing.T) {
+func TestShareSessionStopInvalidatesAccessAndDisconnectsAllViewers(t *testing.T) {
 	for _, disconnect := range []bool{false, true} {
 		t.Run(map[bool]string{false: "stop", true: "sharer-disconnect"}[disconnect], func(t *testing.T) {
 			server := httptest.NewTLSServer(signaling.New("https://share.example"))
@@ -175,6 +230,14 @@ func TestShareSessionStopInvalidatesAccessAndDisconnectsViewer(t *testing.T) {
 			send(t, viewer, join)
 			receive(t, viewer, "joined")
 			receive(t, sharer, "viewer-joined")
+			viewers := []*websocket.Conn{viewer}
+			for range 3 {
+				next := connect(t, server)
+				send(t, next, join)
+				receive(t, next, "joined")
+				receive(t, sharer, "viewer-joined")
+				viewers = append(viewers, next)
+			}
 			send(t, viewer, message{"type": "stop"})
 			if got := receive(t, viewer, "error"); got["error"] != "not-sharer" {
 				t.Fatalf("%#v", got)
@@ -187,10 +250,18 @@ func TestShareSessionStopInvalidatesAccessAndDisconnectsViewer(t *testing.T) {
 					t.Fatalf("%#v", got)
 				}
 			}
-			receive(t, viewer, "stopped")
-			send(t, viewer, join)
-			if got := receive(t, viewer, "error"); got["error"] != "invalid-code" {
-				t.Fatalf("%#v", got)
+			for _, viewer := range viewers {
+				if got := receive(t, viewer, "stopped"); got["state"] != "stopped" || got["viewers"] != float64(0) {
+					t.Fatalf("%#v", got)
+				}
+				send(t, viewer, message{"type": "ice", "candidate": message{"candidate": ""}})
+				if got := receive(t, viewer, "error"); got["error"] != "not-joined" {
+					t.Fatalf("%#v", got)
+				}
+				send(t, viewer, join)
+				if got := receive(t, viewer, "error"); got["error"] != "invalid-code" {
+					t.Fatalf("%#v", got)
+				}
 			}
 			if !disconnect {
 				send(t, sharer, message{"type": "start"})
@@ -242,6 +313,10 @@ func TestShareSessionCanDisconnectFailedPeerWithoutStoppingCaptureSession(t *tes
 	send(t, viewer, join)
 	peer := receive(t, viewer, "joined")["peer"]
 	receive(t, sharer, "viewer-joined")
+	survivor := connect(t, server)
+	send(t, survivor, join)
+	survivorPeer := receive(t, survivor, "joined")["peer"]
+	receive(t, sharer, "viewer-joined")
 	send(t, viewer, message{"type": "disconnect-peer", "peer": peer})
 	if got := receive(t, viewer, "error"); got["error"] != "not-sharer" {
 		t.Fatalf("%#v", got)
@@ -250,12 +325,18 @@ func TestShareSessionCanDisconnectFailedPeerWithoutStoppingCaptureSession(t *tes
 	if got := receive(t, viewer, "error"); got["error"] != "connection-failed" {
 		t.Fatalf("%#v", got)
 	}
-	if got := receive(t, sharer, "viewer-left"); got["state"] != "sharing" || got["viewers"] != float64(0) {
+	if got := receive(t, sharer, "viewer-left"); got["state"] != "sharing" || got["viewers"] != float64(1) || got["peer"] != peer {
 		t.Fatalf("%#v", got)
 	}
+	send(t, sharer, message{"type": "offer", "peer": survivorPeer, "sdp": message{"type": "offer", "sdp": "v=0\r\n"}})
+	receive(t, survivor, "offer")
 	send(t, viewer, join)
-	receive(t, viewer, "joined")
-	receive(t, sharer, "viewer-joined")
+	if got := receive(t, viewer, "joined"); got["viewers"] != float64(2) || got["peer"] == peer {
+		t.Fatalf("%#v", got)
+	}
+	if got := receive(t, sharer, "viewer-joined"); got["viewers"] != float64(2) {
+		t.Fatalf("%#v", got)
+	}
 }
 
 func TestShareSessionUnresponsiveSharerLosesAccess(t *testing.T) {

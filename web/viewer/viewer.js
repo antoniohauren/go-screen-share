@@ -47,7 +47,7 @@ async function receive(run, message) {
   if (message.type === "error") {
     const errors = {
       "invalid-code": "Code is incorrect or the session has ended. Check the URL and code with your friend.",
-      "session-full": "Session full. One viewer is already watching. Reconnect when they leave.",
+      "session-full": "Session full. Four viewers are already connected. Reconnect when someone leaves.",
       "connection-failed": "Your direct connection failed. Sharing is still active; reconnect with the same code. If it fails again, try another network; no TURN relay is available.",
       "invalid-message": "Signaling rejected the request. Check that app and server versions match.",
       "not-joined": "You are no longer joined. Reconnect to try again.",

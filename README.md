@@ -1,6 +1,6 @@
 # Screen Share
 
-Windows 11 Wails sharer and HTTPS browser receiver for **one viewer** (issue #2).
+Windows 11 Wails sharer and HTTPS browser receiver for **up to four viewers**.
 Media travels directly between WebView2 and the viewer over WebRTC. The Go
 service holds ephemeral session state and relays SDP/ICE only. No TURN, media
 hosting, accounts, recording, or persistent session data.
@@ -61,11 +61,11 @@ $env:SCREENSHARE_URL = "https://share.example.com"
    audio in the picker, or choose a window for video only.
 2. Full-screen selection without a live audio track fails closed. Window
    selection removes and stops all audio tracks. Tabs/unknown sources are rejected.
-3. Send the displayed URL and code privately to one friend. They open the URL
-   in desktop Chrome, Edge, or Firefox and enter the code. A second viewer gets
+3. Send the displayed URL and code privately to up to four friends. They open the URL
+   in desktop Chrome, Edge, or Firefox and enter the code. A fifth viewer gets
    a session-full message.
 4. Click **Stop sharing**, or stop capture through the platform controls.
-   Capture and the peer connection end; the active code is invalidated.
+   Capture and all peer connections end; the active code is invalidated.
 
 Capture targets adaptive 1920x1080 at 30 fps, not a guaranteed fixed resolution.
 STUN uses `stun:stun.l.google.com:19302`; restrictive NAT/firewall combinations
@@ -84,9 +84,9 @@ node --check web/sharer/sharer.js
 node --check web/viewer/viewer.js
 ```
 
-Tests cover start URL/code/state, wrong codes, one-viewer capacity, leave/rejoin,
-SDP/ICE exchange, harmless stale-peer signaling, wrong-direction rejection,
-failed-peer removal without ending the session, Stop, sharer disconnect,
+Tests cover start URL/code/state, wrong codes, four-viewer capacity, leave/rejoin counts,
+per-viewer SDP/ICE exchange and isolation, harmless stale-peer signaling, wrong-direction rejection,
+failed-peer removal without interrupting another viewer, Stop for all viewers, sharer disconnect,
 new credentials on restart, HTTPS enforcement, and service shutdown. The silent
 disconnect check takes 32 seconds; `go test -short ./...` skips real-time heartbeat checks.
 
@@ -102,10 +102,14 @@ They have **not** been verified by the Linux-hosted automated suite.
 - Omit screen audio in the picker: Start must fail without exposing access details.
 - Share a window while system audio plays: receiver gets only that window and
   no audio. Reject browser-tab capture if offered.
-- Join a second browser: session full. Disconnect first viewer, reconnect with
-  the same URL/code, and verify media resumes.
+- Connect four browser viewers simultaneously; verify media reaches each and
+  the sharer count shows four. Join a fifth browser: session full.
+- Disconnect one viewer; count drops to three and other viewers keep receiving
+  media. Reconnect with the same URL/code; media resumes and count returns to four.
+- Fail one viewer's negotiation or network connection; verify other viewers
+  remain connected and the failed viewer can reconnect with the active code.
 - Stop while choosing, connecting, negotiating, and streaming. Confirm platform
-  capture indicator clears, receiver stops, and old credentials cannot rejoin.
+  capture indicator clears, all four receivers stop, and old credentials cannot rejoin.
 - Close the app, interrupt its network, and restart the signaling service.
   Verify media cleanup and invalidation after signaling disconnect is detected.
 - Test different networks, including a restrictive NAT; failures must explain

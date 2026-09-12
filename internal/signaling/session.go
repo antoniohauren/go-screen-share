@@ -35,8 +35,9 @@ type client struct {
 }
 
 type shareSession struct {
-	id, code       string
-	sharer, viewer *client
+	id, code string
+	sharer   *client
+	viewers  map[string]*client
 }
 
 type Server struct {
@@ -140,9 +141,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer s.mu.Unlock()
 		delete(s.clients, c)
 		if session := c.session; session != nil {
-			if session.viewer == c {
-				session.viewer = nil
-				session.sharer.emit(message{Type: "viewer-left", Peer: c.id, State: "sharing"})
+			if session.sharer != c {
+				delete(session.viewers, c.id)
+				session.sharer.emit(message{Type: "viewer-left", Peer: c.id, State: "sharing", Viewers: len(session.viewers)})
 			} else {
 				s.stop(session)
 			}
@@ -180,14 +181,14 @@ func (s *Server) handle(c *client, msg message) {
 			c.emit(message{Type: "error", Error: "not-sharer"})
 			return
 		}
-		if session.viewer == nil || session.viewer.id != msg.Peer {
+		viewer := session.viewers[msg.Peer]
+		if viewer == nil {
 			return
 		}
-		viewer := session.viewer
 		viewer.session = nil
-		session.viewer = nil
+		delete(session.viewers, viewer.id)
 		viewer.emit(message{Type: "error", Error: "connection-failed"})
-		c.emit(message{Type: "viewer-left", Peer: viewer.id, State: "sharing"})
+		c.emit(message{Type: "viewer-left", Peer: viewer.id, State: "sharing", Viewers: len(session.viewers)})
 		return
 	}
 	if msg.Type == "stop" {
@@ -208,15 +209,15 @@ func (s *Server) handle(c *client, msg message) {
 			c.emit(message{Type: "error", Error: "invalid-code"})
 			return
 		}
-		if session.viewer != nil {
+		if len(session.viewers) >= 4 {
 			c.emit(message{Type: "error", Error: "session-full"})
 			return
 		}
 		c.session = session
 		c.id = token()
-		session.viewer = c
-		c.emit(message{Type: "joined", Peer: c.id, State: "sharing", Viewers: 1})
-		session.sharer.emit(message{Type: "viewer-joined", Peer: c.id, State: "sharing", Viewers: 1})
+		session.viewers[c.id] = c
+		c.emit(message{Type: "joined", Peer: c.id, State: "sharing", Viewers: len(session.viewers)})
+		session.sharer.emit(message{Type: "viewer-joined", Peer: c.id, State: "sharing", Viewers: len(session.viewers)})
 		return
 	}
 	if msg.Type == "start" {
@@ -224,7 +225,7 @@ func (s *Server) handle(c *client, msg message) {
 			c.emit(message{Type: "error", Error: "already-joined"})
 			return
 		}
-		session := &shareSession{id: token(), code: token(), sharer: c}
+		session := &shareSession{id: token(), code: token(), sharer: c, viewers: make(map[string]*client)}
 		s.sessions[session.id] = session
 		c.session = session
 		c.emit(message{Type: "started", Session: session.id, Code: session.code, URL: s.origin + "/?session=" + session.id, State: "sharing"})
@@ -237,7 +238,8 @@ func (s *Server) handle(c *client, msg message) {
 			return
 		}
 		// A departed viewer's in-flight signaling must not end a healthy share.
-		if session.viewer == nil || msg.Peer != session.viewer.id {
+		viewer := session.viewers[msg.Peer]
+		if viewer == nil || (c != session.sharer && c != viewer) {
 			return
 		}
 		valid := true
@@ -256,7 +258,7 @@ func (s *Server) handle(c *client, msg message) {
 				SDP  string `json:"sdp"`
 			}
 			valid = valid && json.Unmarshal(msg.SDP, &sdp) == nil && sdp.Type == msg.Type && sdp.SDP != ""
-			valid = valid && ((msg.Type == "offer" && c == session.sharer) || (msg.Type == "answer" && c == session.viewer))
+			valid = valid && ((msg.Type == "offer" && c == session.sharer) || (msg.Type == "answer" && c == viewer))
 			msg.SDP, _ = json.Marshal(sdp)
 		}
 		if !valid {
@@ -265,7 +267,7 @@ func (s *Server) handle(c *client, msg message) {
 		}
 		target := session.sharer
 		if c == session.sharer {
-			target = session.viewer
+			target = viewer
 		}
 		relay := message{Type: msg.Type, Peer: msg.Peer}
 		if msg.Type == "ice" {
@@ -281,10 +283,11 @@ func (s *Server) handle(c *client, msg message) {
 
 func (s *Server) stop(session *shareSession) {
 	delete(s.sessions, session.id)
-	for _, c := range []*client{session.sharer, session.viewer} {
-		if c != nil {
-			c.session = nil
-			c.emit(message{Type: "stopped", State: "stopped"})
-		}
+	session.sharer.session = nil
+	session.sharer.emit(message{Type: "stopped", State: "stopped"})
+	for _, c := range session.viewers {
+		c.session = nil
+		c.emit(message{Type: "stopped", State: "stopped"})
 	}
+	clear(session.viewers)
 }
