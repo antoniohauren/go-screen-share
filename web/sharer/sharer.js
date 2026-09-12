@@ -14,6 +14,8 @@ let active;
 let native = false;
 let nativeStart = Promise.resolve();
 let nativeStopping = false;
+let windowsAudio = false;
+let audioOperation = Promise.resolve();
 
 refreshAudio.addEventListener("click", async () => {
   refreshAudio.disabled = true;
@@ -27,7 +29,7 @@ refreshAudio.addEventListener("click", async () => {
       audioApp.add(new Option("Previous stream ended — refresh and select again", selected));
     }
     audioApp.value = selected;
-    statusText.textContent = apps.length ? "Choose the app audio stream, then choose your screen or window." : "No playback streams found. Play sound in your app, then refresh.";
+    statusText.textContent = apps.length ? "Choose the audio app, then choose your screen or window." : windowsAudio ? "No app windows found. Open your app, then refresh." : "No playback streams found. Play sound in your app, then refresh.";
   } catch (error) {
     statusText.textContent = `Cannot list app audio: ${error.message || error}`;
   } finally {
@@ -65,6 +67,19 @@ function stop(message = "Capture stopped.", confirmed = false) {
     clearTimeout(run.timer);
     clearTimeout(run.watchdog);
     run.stream?.getTracks().forEach(track => track.stop());
+    run.offAudio?.();
+    run.offAudioError?.();
+    run.audioNode?.disconnect();
+    run.audioNode?.port.close();
+    if (run.audioContext) {
+      run.audioContext.close().catch(() => {});
+      audioOperation = audioOperation.catch(() => {}).then(() => window.go.main.App.StopAudio());
+      audioOperation.then(() => {
+        if (!active) startButton.disabled = !origin;
+      }).catch(error => {
+        statusText.textContent = `Audio stop failed: ${error.message || error}. Close the app to end capture.`;
+      });
+    }
     for (const peer of run.peers.values()) removePeer(run, peer);
     if (run.socket?.readyState === WebSocket.OPEN) {
       run.socket.send(JSON.stringify({ type: "stop" }));
@@ -77,7 +92,9 @@ function stop(message = "Capture stopped.", confirmed = false) {
   stateText.textContent = "STOPPED";
   statusText.textContent = message + (run?.socket && !confirmed
     ? " Offline session access may take about 30 seconds to expire." : "");
-  startButton.disabled = !origin;
+  startButton.disabled = !origin || !!run?.audioContext;
+  audioApp.disabled = false;
+  refreshAudio.disabled = false;
   stopButton.disabled = true;
 }
 
@@ -85,6 +102,34 @@ function send(run, message) {
   if (active === run && run.socket.readyState === WebSocket.OPEN) {
     run.socket.send(JSON.stringify(message));
   }
+}
+
+async function startAppAudio(run, id) {
+  const context = run.audioContext;
+  await run.audioResume;
+  await context.audioWorklet.addModule("app-audio.js");
+  if (active !== run) return;
+  if (context.sampleRate !== 48000 || context.state !== "running") throw new Error("App audio requires a running 48 kHz AudioContext.");
+  const node = run.audioNode = new AudioWorkletNode(context, "app-audio", { numberOfInputs: 0, outputChannelCount: [2] });
+  const destination = context.createMediaStreamDestination();
+  node.connect(destination);
+  destination.stream.getAudioTracks().forEach(track => run.stream.addTrack(track));
+  const token = crypto.randomUUID();
+  run.offAudio = window.runtime.EventsOn("app-audio", event => {
+    if (active !== run || event.token !== token) return;
+    const bytes = Uint8Array.from(atob(event.pcm), c => c.charCodeAt(0));
+    node.port.postMessage(new Int16Array(bytes.buffer), [bytes.buffer]);
+  });
+  run.offAudioError = window.runtime.EventsOn("app-audio-error", event => {
+    if (active === run && event.token === token) stop(`App audio failed: ${event.error}`);
+  });
+  context.onstatechange = () => {
+    if (active === run && context.state !== "running") stop("App audio processing stopped. Start sharing again.");
+  };
+  audioOperation = audioOperation.then(async () => {
+    if (active === run) await window.go.main.App.StartAudio(id, token);
+  });
+  await audioOperation;
 }
 
 function removePeer(run, peer) {
@@ -196,18 +241,26 @@ startButton.addEventListener("click", async () => {
     }
     return;
   }
-  if (active || !origin) return;
+  if (active || !origin || startButton.disabled) return;
+  const selectedAudio = windowsAudio ? audioApp.value : "";
   const run = { peers: new Map(), stream: null, socket: null, started: false };
   active = run;
   startButton.disabled = true;
   stopButton.disabled = false;
+  audioApp.disabled = true;
+  refreshAudio.disabled = true;
   stateText.textContent = "CHOOSING";
-  statusText.textContent = "Choose a screen with audio, or a window without audio.";
+  statusText.textContent = selectedAudio ? "Choose a screen or window. Only the selected app's audio will be shared." : "Choose a screen with audio, or a window without audio.";
   try {
+    if (selectedAudio) {
+      run.audioContext = new AudioContext({ sampleRate: 48000 });
+      run.audioResume = run.audioContext.resume();
+      run.audioResume.catch(() => {});
+    }
     // Keep this call in the click activation: backend config was loaded beforehand.
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-      audio: true, systemAudio: "include", selfBrowserSurface: "exclude",
+      audio: !selectedAudio, systemAudio: selectedAudio ? "exclude" : "include", windowAudio: "exclude", selfBrowserSurface: "exclude",
       surfaceSwitching: "exclude"
     });
     if (active !== run) {
@@ -218,11 +271,13 @@ startButton.addEventListener("click", async () => {
     const video = stream.getVideoTracks()[0];
     const surface = video?.getSettings().displaySurface;
     if (!["monitor", "window"].includes(surface)) throw new Error("Choose a full screen or window, not a browser tab. Unknown capture sources are not supported.");
-    if (surface === "window") {
+    if (selectedAudio || surface === "window") {
       stream.getAudioTracks().forEach(track => { stream.removeTrack(track); track.stop(); });
     } else if (!stream.getAudioTracks().some(track => track.readyState === "live")) {
       throw new Error("Full-screen sharing requires system audio. Choose a screen and enable audio in the picker, or share a window instead.");
     }
+    if (selectedAudio) await startAppAudio(run, selectedAudio);
+    if (active !== run) return;
     stream.getTracks().forEach(track => track.addEventListener("ended", () => {
       if (active === run) stop("Capture ended. Sharing stopped locally.");
     }));
@@ -291,6 +346,12 @@ window.addEventListener("pagehide", () => stop());
     const parsed = new URL(configured);
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) throw new Error("SCREENSHARE_URL must be an HTTPS origin.");
     native = typeof window.go.main.App.Start === "function";
+    windowsAudio = !native && typeof window.go.main.App.StartAudio === "function";
+    if (windowsAudio) {
+      document.querySelector("#app-audio").hidden = false;
+      document.querySelector("#capture-help").textContent = "Select an audio app to share its sound with a screen or window. Without a selection, screens share system audio and windows share video only. Microphone audio is never captured.";
+      document.querySelector("#app-audio-note").textContent = "Refresh and select the app window whose sound you want, then choose matching video in the picker. Audio includes that process and its child processes, possibly other windows or tabs from the same app. Other apps are excluded. Restarted apps require selecting again.";
+    }
     if (native) {
       document.querySelector("#capture-help").textContent = "Choose an audio app below to share its sound with a screen or window. Without an app selection, screens share all system audio and windows share video only. Microphone audio is never captured.";
       document.querySelector("#app-audio").hidden = false;

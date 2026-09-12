@@ -1,7 +1,10 @@
-> Subsequent requirement: Linux now offers an explicit playback-stream picker for
-> app-only audio with a window or screen. This supersedes the Linux window-audio
-> exclusion below; see README's GNOME sharing instructions. Windows behavior is
-> unchanged. Audio-stream selection is independent of the native window picker.
+> Subsequent requirement: Both platforms now offer explicit app-audio selection
+> with a window or screen, superseding the window-audio exclusions below. Linux
+> isolates a selected playback stream; Windows isolates the selected window's
+> process tree through WASAPI loopback. Audio selection is independent of video
+> selection, and other windows/tabs sharing that stream or process tree may be
+> audible. Without app selection, screens share system audio and windows remain
+> video-only. See README's platform sharing instructions.
 
 ## Problem Statement
 

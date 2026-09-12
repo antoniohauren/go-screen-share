@@ -27,7 +27,13 @@ jobs:
       - name: Check JavaScript
         run: |
           node --check web/sharer/sharer.js
+          node --check web/sharer/app-audio.js
+          node --test web/sharer_audio_test.cjs
           node --check web/viewer/viewer.js
+      - name: Cross-check Windows audio
+        run: |
+          GOOS=windows GOARCH=amd64 go vet ./cmd/sharer ./internal/winaudio
+          GOOS=windows GOARCH=amd64 go test -c -o "$RUNNER_TEMP/winaudio.test.exe" ./internal/winaudio
       - name: Export artifacts
         run: |
           bash packaging/build.sh windows build

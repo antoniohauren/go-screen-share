@@ -61,7 +61,9 @@ checks pass. Rebuild and redistribute when bundled runtime libraries need update
 Requires Go 1.24+; the Windows desktop needs a current Microsoft Edge WebView2
 Evergreen Runtime. The capture picker is WebView2's built-in screen/window picker,
 not a custom window list or a direct WinRT `GraphicsCapturePicker` integration.
-WebView2 handles native capture, system-loopback audio, encoding, and WebRTC.
+WebView2 handles video capture, system-loopback audio, encoding, and WebRTC.
+Optional app audio uses native WASAPI process-loopback capture, fed into WebView2
+through a 48 kHz stereo AudioWorklet. No extra runtime or audio driver is required.
 
 ```sh
 go build -o signaling ./cmd/signaling
@@ -169,14 +171,22 @@ $env:SCREENSHARE_URL = "https://share.example.com"
 .\screen-share.exe
 ```
 
-1. Click **Choose screen or window**. Select a full screen and enable system
-   audio in the picker, or choose a window for video only.
-2. Full-screen selection without a live audio track fails closed. Window
-   selection removes and stops all audio tracks. Tabs/unknown sources are rejected.
-3. Send the displayed URL and code privately to up to four friends. They open the URL
+1. For app-only sound, click **Refresh apps** and select the app's window under
+   **Audio app**. Then click **Choose screen or window** and choose the matching
+   window (or a screen) in the WebView2 picker. The two selections are independent.
+   Apps appear even when silent; start playback when ready.
+2. App audio captures the selected window's **process and child processes**. Other
+   apps and microphone input are excluded. Windows/tabs sharing that process tree
+   may also be audible; this is process isolation, not per-tab isolation. Playback
+   continues locally. An unavailable/restarted process fails without system-audio
+   fallback; refresh and select again. Closing the selected process stops sharing.
+3. Without an audio app selected, choose a full screen with system audio enabled,
+   or a window for video only. Full-screen selection without a live audio track
+   fails closed. Tabs/unknown sources are rejected in either mode.
+4. Send the displayed URL and code privately to up to four friends. They open the URL
    in desktop Chrome, Edge, or Firefox and enter the code. A fifth viewer gets
    a session-full message.
-4. Click **Stop sharing**, or stop capture through the platform controls.
+5. Click **Stop sharing**, or stop capture through the platform controls.
    Capture and all peer connections end; the active code is invalidated.
 
 Capture targets adaptive 1920x1080 at 30 fps, not a guaranteed fixed resolution.
@@ -193,6 +203,8 @@ real TLS/WebSocket clients rather than internal mocks:
 go test -race ./...
 go vet ./...
 node --check web/sharer/sharer.js
+node --check web/sharer/app-audio.js
+node --test web/sharer_audio_test.cjs
 node --check web/viewer/viewer.js
 ```
 
@@ -212,6 +224,19 @@ reconnect, no access on capture/audio readiness failure or cancellation,
 capture-loss cleanup, foreign access-URL rejection, failed-peer isolation, Stop
 invalidation, and A/V clock alignment despite deliberately delayed audio delivery.
 Synthetic media tests do not establish physical screen/audio correctness.
+
+JavaScript checks exercise app-audio routing, startup failure, cancellation during
+the picker/native startup, stale events, cleanup, and PCM buffering. On a Windows 11
+development machine with an active audio output, run the native isolation check:
+
+```powershell
+$env:SCREENSHARE_TEST_APP_AUDIO = "1"
+go test ./internal/winaudio -run TestProcessAudioIsolation -v
+```
+
+This opt-in test **plays two audible tones** in separate processes and verifies
+that capturing each process includes its tone and excludes the other. It also
+exercises native activation, cancellation, and restart. It cannot run on Linux.
 
 Packaging tests use the agreed **build command → distributable artifact seam**:
 `python3 packaging/test_artifacts.py` builds both real artifacts, checks the Windows
@@ -233,8 +258,14 @@ They have **not** been verified by the Linux-hosted automated suite.
 - Share an entire screen while playing system audio. Verify moving video and
   sound in Chrome, Edge, and Firefox, including playback/unmute controls.
 - Omit screen audio in the picker: Start must fail without exposing access details.
-- Share a window while system audio plays: receiver gets only that window and
-  no audio. Reject browser-tab capture if offered.
+- Without an audio app selected, share a window while system audio plays:
+  receiver gets only that window and no audio. Reject browser-tab capture if offered.
+- Select an audio app and share its window while a different app plays distinct
+  sound. Verify only the selected process tree is heard in Chrome, Edge, and Firefox,
+  with local playback continuing. Repeat with a screen and app-only audio selected.
+- Close/restart the selected app: capture must stop without switching to system
+  audio. Refresh, select again, and verify sharing restarts. Check silent apps,
+  minimized sharer, A/V sync, and Stop during app-audio startup.
 - Connect four browser viewers simultaneously; verify media reaches each and
   the sharer count shows four. Join a fifth browser: session full.
 - Disconnect one viewer; count drops to three and other viewers keep receiving
@@ -254,6 +285,7 @@ They have **not** been verified by the Linux-hosted automated suite.
 
 - [Microsoft WebView2 ScreenCaptureStarting documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_27#add_screencapturestarting)
 - [Microsoft WebView2 getDisplayMedia sample](https://github.com/MicrosoftEdge/WebView2Samples/blob/main/SampleApps/WebView2APISample/assets/ScenarioScreenCapture.html)
+- [Microsoft WASAPI application-loopback sample](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/ApplicationLoopback)
 - [WebView2 screen/system-audio report](https://github.com/MicrosoftEdge/WebView2Feedback/issues/4327)
 - [Screen Capture API: systemAudio is a preference, not a guarantee](https://www.w3.org/TR/screen-capture/#dom-displaymediastreamoptions-systemaudio)
 - [ScreenCast portal API](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
