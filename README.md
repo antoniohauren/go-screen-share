@@ -1,7 +1,7 @@
 # Screen Share
 
-Windows 11 Wails sharer and HTTPS browser receiver for **up to four viewers**.
-Media travels directly between WebView2 and the viewer over WebRTC. The Go
+Windows 11 and GNOME Wayland Wails sharers with an HTTPS browser receiver for
+**up to four viewers**. Media travels directly from the sharer over WebRTC. The Go
 service holds ephemeral session state and relays SDP/ICE only. No TURN, media
 hosting, accounts, recording, or persistent session data.
 
@@ -18,7 +18,50 @@ GOOS=windows go build -tags production -ldflags="-H windowsgui" -o screen-share.
 ```
 
 The Windows executable embeds its UI; there is no npm build or installer.
-Windows resource metadata/signing and Linux desktop capture are outside this slice.
+Windows resource metadata/signing and Linux AppImage packaging are outside this slice.
+
+### Linux Build
+
+Requires Go 1.24+, a C compiler, `pkg-config`, GTK3/WebKitGTK 4.1 development
+libraries, and GStreamer development libraries (`gstreamer-app-1.0`). Runtime
+requires GNOME Wayland, PipeWire, `pipewire-pulse`, `xdg-desktop-portal-gnome`, and
+GStreamer plugins providing `pipewiresrc`, `pulsesrc`, `videoconvert`, `videoscale`,
+`videorate`, `vp8enc`, `rtpvp8pay`, `audioconvert`, `audioresample`, `opusenc`,
+`rtpopuspay`, and `appsink`. Tests additionally use `videotestsrc` and `audiotestsrc`.
+On Arch these come from GTK3/WebKit2GTK 4.1, GStreamer base/good plugins, and PipeWire
+packages; other distributions split development packages separately.
+
+```sh
+go build -tags 'production,webkit2_41' -o screen-share ./cmd/sharer
+SCREENSHARE_URL=https://share.example.com ./screen-share
+```
+
+Linux uses Wails only for UI. Native Go code opens the ScreenCast portal, reads its
+PipeWire video stream through GStreamer, and sends VP8/Opus with Pion WebRTC.
+WebKitGTK does not need browser-side WebRTC support. One encoder feeds all viewers;
+receiver REMB feedback adjusts bitrate between 200 kbps and 4 Mbps for the slowest
+reported link. Sender reports retain the common capture-clock mapping for audio
+and video, rather than treating encoder/delivery delays as presentation offsets.
+Video preserves aspect ratio in a 1920x1080 canvas at up to 30 fps.
+Without bitrate feedback the encoder stays at its 4 Mbps target. No media reaches
+the signaling service, and no microphone is opened.
+
+### Share On GNOME Wayland
+
+1. Click **Choose screen or window** and select one source in the GNOME portal picker.
+2. Selecting a screen also captures the complete mix playing through the default
+   speakers/headphones at capture start. This is separate from portal video consent
+   and disclosed in the UI before selection. It does not combine multiple output
+   devices, capture a microphone, or isolate individual applications. PipeWire
+   stream properties disable movement, reconnection, and fallback to other outputs.
+3. Selecting a window opens video capture only, with no audio capture pipeline.
+4. URL/code appear only after every required media track produces packets and
+   secure signaling starts. Missing system audio fails closed; there is no input fallback.
+5. Stop cancels a pending picker or ends local media and portal access. Portal closure,
+   capture errors, app exit, and signaling loss also end sharing. Restart after changing
+   the default audio device to select its new mix.
+
+This is a dynamically linked Linux executable, not yet a self-contained AppImage.
 
 ## Run Public Signaling
 
@@ -84,11 +127,22 @@ node --check web/sharer/sharer.js
 node --check web/viewer/viewer.js
 ```
 
+On Linux with WebKitGTK 4.1, use `go test -race -tags webkit2_41 ./...` and
+`go vet -tags webkit2_41 ./...`. Building only `./cmd/signaling` does not require
+GTK or GStreamer. Native sharer tests require GStreamer and cgo.
+
 Tests cover start URL/code/state, wrong codes, four-viewer capacity, leave/rejoin counts,
 per-viewer SDP/ICE exchange and isolation, harmless stale-peer signaling, wrong-direction rejection,
 failed-peer removal without interrupting another viewer, Stop for all viewers, sharer disconnect,
 new credentials on restart, HTTPS enforcement, and service shutdown. The silent
 disconnect check takes 32 seconds; `go test -short ./...` skips real-time heartbeat checks.
+
+Linux lifecycle tests also exercise real GStreamer test sources and Pion receiver
+connections: video-only SDP/media, four simultaneous audio/video receivers,
+reconnect, no access on capture/audio readiness failure or cancellation,
+capture-loss cleanup, foreign access-URL rejection, failed-peer isolation, Stop
+invalidation, and A/V clock alignment despite deliberately delayed audio delivery.
+Synthetic media tests do not establish physical screen/audio correctness.
 
 ### Manual Acceptance Gates
 
@@ -123,3 +177,30 @@ They have **not** been verified by the Linux-hosted automated suite.
 - [Microsoft WebView2 getDisplayMedia sample](https://github.com/MicrosoftEdge/WebView2Samples/blob/main/SampleApps/WebView2APISample/assets/ScenarioScreenCapture.html)
 - [WebView2 screen/system-audio report](https://github.com/MicrosoftEdge/WebView2Feedback/issues/4327)
 - [Screen Capture API: systemAudio is a preference, not a guarantee](https://www.w3.org/TR/screen-capture/#dom-displaymediastreamoptions-systemaudio)
+- [ScreenCast portal API](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
+- [GStreamer PipeWire source](https://docs.pipewire.org/page_gstreamer.html)
+
+### GNOME Manual Acceptance Gates
+
+These gates remain **unverified**. Development environment: GNOME 50.4 on Wayland,
+PipeWire 1.6.8, WebKitGTK 4.1 API / 2.52.6, GStreamer 1.28.6. Record actual OS,
+runtime versions, browser versions, and results when performing acceptance.
+
+- Launch the production build; verify picker focus, screen/window choices, keyboard
+  access, normal/high DPI, and cancellation without leaving a portal session.
+- Stop while picker is open and during connection setup. Immediately restart; old
+  callbacks must not expose a URL/code or leave a platform capture indicator.
+- Share a screen while playing sound through default speakers/headphones. Verify
+  moving video and matching sound in desktop Chrome, Edge, and Firefox. Speak into
+  the microphone and play sound on another output: neither should be included.
+- Share a window while system audio plays: only that window reaches viewers, and
+  SDP/media contain no audio. Move/resize/occlude the window and leave screen static.
+- Remove/unavailable default audio output before Start: no URL/code is exposed.
+  Remove output during capture: failure must stop sharing, never select microphone.
+- Open four browser viewers, leave/reconnect one, and reject a fifth. Late viewers
+  must decode video promptly; failure of one peer must not interrupt the other three.
+- Stop via app and GNOME capture controls, close app, interrupt signaling, and
+  restart portal/PipeWire. Verify local audio/video stop, access details clear,
+  and old credentials fail after signaling disconnect detection.
+- Test cross-network browser interoperability, A/V sync, bitrate adaptation, and
+  restrictive NAT failure feedback. There is no TURN relay fallback.

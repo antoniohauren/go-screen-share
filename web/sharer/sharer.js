@@ -9,8 +9,32 @@ const urlField = document.querySelector("#url");
 const codeField = document.querySelector("#code");
 let origin;
 let active;
+let native = false;
+let nativeStart = Promise.resolve();
+let nativeStopping = false;
 
 function stop(message = "Capture stopped.", confirmed = false) {
+  if (native) {
+    nativeStopping = true;
+    startButton.disabled = true;
+    stopButton.disabled = true;
+    urlField.value = "";
+    codeField.value = "";
+    viewerCount.textContent = "0";
+    stateText.textContent = "STOPPING";
+    statusText.textContent = "Stopping native capture...";
+    nativeStart.catch(() => {}).then(() => window.go.main.App.Stop()).then(() => {
+      nativeStopping = false;
+      stateText.textContent = "STOPPED";
+      startButton.disabled = !origin;
+      stopButton.disabled = true;
+      statusText.textContent = "Capture stopped. Offline session access may take about 30 seconds to expire.";
+    }).catch(error => {
+      statusText.textContent = `Stop failed: ${error.message || error}. Close the app to end capture.`;
+      stopButton.disabled = false;
+    });
+    return;
+  }
   const run = active;
   active = null;
   if (run) {
@@ -130,6 +154,20 @@ async function receive(run, message) {
 }
 
 startButton.addEventListener("click", async () => {
+  if (native) {
+    if (startButton.disabled) return;
+    nativeStopping = false;
+    startButton.disabled = true;
+    stopButton.disabled = false;
+    try { nativeStart = window.go.main.App.Start(); await nativeStart; }
+    catch (error) {
+      if (nativeStopping) return;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      statusText.textContent = `Cannot start: ${error.message || error}`;
+    }
+    return;
+  }
   if (active || !origin) return;
   const run = { peers: new Map(), stream: null, socket: null, started: false };
   active = run;
@@ -224,7 +262,25 @@ window.addEventListener("pagehide", () => stop());
     const configured = await window.go.main.App.SignalingURL();
     const parsed = new URL(configured);
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) throw new Error("SCREENSHARE_URL must be an HTTPS origin.");
-    if (!navigator.mediaDevices?.getDisplayMedia || !window.RTCPeerConnection) throw new Error("This WebView2 runtime does not support screen capture and WebRTC. Update WebView2 and try again.");
+    native = typeof window.go.main.App.Start === "function";
+    if (native) {
+      document.querySelector("#capture-help").textContent = "Choose a screen or window in the GNOME picker. Screen sharing also captures all sound from your default speakers/headphones, without microphone audio. Window sharing is video only.";
+      window.runtime.EventsOn("share-state", state => {
+        if (nativeStopping) return;
+        urlField.value = state.url;
+        codeField.value = state.code;
+        viewerCount.textContent = String(state.viewers);
+        stateText.textContent = state.state.toUpperCase();
+        startButton.disabled = state.state !== "stopped";
+        stopButton.disabled = state.state === "stopped";
+        statusText.textContent = state.error || state.notice || ({
+          choosing: "Choose a screen or window. Cancel shares nothing.",
+          connecting: "Starting native capture and secure signaling...",
+          sharing: "Sharing is live. Send the URL and code to up to four viewers.",
+          stopped: "Capture stopped. Offline session access may take about 30 seconds to expire."
+        })[state.state];
+      });
+    } else if (!navigator.mediaDevices?.getDisplayMedia || !window.RTCPeerConnection) throw new Error("This WebView2 runtime does not support screen capture and WebRTC. Update WebView2 and try again.");
     origin = parsed.origin;
     startButton.disabled = false;
     statusText.textContent = "Ready. Nothing is shared until you choose a source.";
