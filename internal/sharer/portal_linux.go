@@ -313,10 +313,15 @@ func (s *Source) request(ctx context.Context, method string, options map[string]
 			if signal.Sender != s.owner || signal.Path != path || signal.Name != portalRequest+".Response" {
 				continue
 			}
-			var response uint32
-			var results map[string]dbus.Variant
-			if err := dbus.Store(signal.Body, &response, &results); err != nil {
-				return nil, fmt.Errorf("portal %s response: %w", method, err)
+			if len(signal.Body) != 2 {
+				return nil, fmt.Errorf("portal %s returned an invalid response body", method)
+			}
+			response, responseOK := signal.Body[0].(uint32)
+			// Preserve decoded variant signatures: dbus.Store rebuilds map values
+			// and changes arrays of decoded structs from a(ua{sv}) to aav.
+			results, resultsOK := signal.Body[1].(map[string]dbus.Variant)
+			if !responseOK || !resultsOK {
+				return nil, fmt.Errorf("portal %s returned invalid response types", method)
 			}
 			complete = true
 			if err := ctx.Err(); err != nil {
